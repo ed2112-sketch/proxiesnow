@@ -1,0 +1,59 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Protocol {
+  HTTP
+  SOCKS5
+}
+
+enum ProxyStatus {
+  active
+  inactive
+}
+
+model Proxy {
+  id         String      @id @default(uuid()) @db.Uuid
+  serverHost String      @map("server_host")
+  ip         String
+  port       Int
+  username   String
+  password   String
+  protocol   Protocol
+  status     ProxyStatus @default(inactive)
+  createdAt  DateTime    @default(now()) @map("created_at")
+  updatedAt  DateTime    @updatedAt @map("updated_at")
+
+  userProxies UserProxy[]
+  usageLogs   UsageLog[]
+
+  @@map("proxies")
+}
+
+model UserProxy {
+  id             String   @id @default(uuid()) @db.Uuid
+  whmcsClientId  Int      @map("whmcs_client_id")
+  whmcsServiceId Int      @map("whmcs_service_id")
+  proxyId        String   @map("proxy_id") @db.Uuid
+  assignedAt     DateTime @default(now()) @map("assigned_at")
+
+  proxy Proxy @relation(fields: [proxyId], references: [id])
+
+  @@unique([whmcsServiceId, proxyId])
+  @@map("user_proxies")
+}
+
+model UsageLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  proxyId       String   @map("proxy_id") @db.Uuid
+  bandwidthUsed BigInt   @map("bandwidth_used")
+  recordedAt    DateTime @default(now()) @map("recorded_at")
+
+  proxy Proxy @relation(fields: [proxyId], references: [id])
+
+  @@map("usage_logs")
+}
