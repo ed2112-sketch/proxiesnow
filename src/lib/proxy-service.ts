@@ -1,6 +1,6 @@
 import { randomBytes } from "crypto";
 import { prisma } from "./db";
-import { Protocol } from "@prisma/client/index";
+import { Protocol } from "@prisma/client";
 
 export function generateCredentials(): { username: string; password: string } {
   return {
