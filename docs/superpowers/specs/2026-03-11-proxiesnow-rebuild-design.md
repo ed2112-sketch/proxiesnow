@@ -2,7 +2,7 @@
 
 ## Overview
 
-Rebuild proxiesnow.com as a Next.js 14+ application deployed on Railway. The site serves two purposes: public marketing pages for SEO and lead generation, and an authenticated customer dashboard for proxy management. User accounts and billing are managed by WHMCS on a separate Digital Ocean droplet. Proxy authentication data lives in a PostgreSQL database on Railway, shared with Squid proxy servers.
+Rebuild proxiesnow.com as a Next.js 15 application deployed on Railway. The site serves two purposes: public marketing pages for SEO and lead generation, and an authenticated customer dashboard for proxy management. User accounts and billing are managed by WHMCS on a separate Digital Ocean droplet. Proxy authentication data lives in a PostgreSQL database on Railway, shared with Squid proxy servers.
 
 ## Architecture
 
@@ -28,7 +28,7 @@ Squid Proxy Servers
 
 | Layer        | Technology                        |
 | ------------ | --------------------------------- |
-| Framework    | Next.js 14+ (App Router)         |
+| Framework    | Next.js 15 (App Router)          |
 | Styling      | Tailwind CSS                      |
 | ORM          | Prisma                           |
 | Database     | PostgreSQL (Railway)             |
@@ -47,8 +47,8 @@ Squid Proxy Servers
 | `/socks5-proxies`    | Product page with pricing, links to WHMCS order  |
 | `/residential-proxies` | Product page with pricing, links to WHMCS order |
 | `/faq`               | FAQ page                                         |
-| `/blog`              | Blog listing and individual posts                |
-| `/contact`           | Contact form                                     |
+| `/blog`              | Blog listing and individual posts (MDX files in repo) |
+| `/contact`           | Contact form (submissions sent via third-party email service e.g. Resend) |
 | `/privacy-policy`    | Privacy policy                                   |
 | `/tos`               | Terms of service                                 |
 
@@ -80,7 +80,7 @@ proxies
 ├── ip              VARCHAR — proxy IP address
 ├── port            INTEGER — proxy port
 ├── username        VARCHAR — auth username
-├── password        VARCHAR — auth password (hashed)
+├── password        VARCHAR — auth password (stored as plaintext for Squid basic auth compatibility)
 ├── protocol        ENUM('HTTP', 'SOCKS5')
 ├── status          ENUM('active', 'inactive')
 ├── created_at      TIMESTAMP
@@ -100,7 +100,19 @@ usage_logs
 └── recorded_at     TIMESTAMP
 ```
 
-Note: The `proxies` table must remain readable by Squid servers for auth verification. The migration from MySQL to PostgreSQL will require updating Squid's auth configuration to point to the new database.
+Note: The `proxies` table must remain readable by Squid servers for auth verification. The migration from MySQL to PostgreSQL will require updating Squid's auth configuration to point to the new database. Proxy passwords are stored as plaintext because Squid's basic auth helper needs to verify credentials directly — the database connection is not publicly exposed, so this is acceptable.
+
+### Proxy Pool & Allocation
+
+Proxies are pre-loaded into the `proxies` table as an available pool. Each proxy row represents a real IP/port on a Squid server. When a provisioning webhook fires:
+
+1. The API selects `quantity` unassigned proxies (not linked in `user_proxies`) matching the `product_type` protocol
+2. Creates `user_proxies` rows linking the selected proxies to the client/service
+3. Sets proxy status to `active`
+
+**IP Replacement:** When a user requests IP replacement, the system unlinks the current proxy (removes `user_proxies` row, sets proxy status to `inactive`), then assigns a new unassigned proxy from the pool. If no proxies are available in the pool, the request is queued and surfaced to the admin.
+
+**Toggle active/inactive:** Changing proxy status takes effect immediately since Squid reads the `proxies` table directly — an `inactive` proxy will be rejected at auth time.
 
 ## WHMCS Integration
 
@@ -111,6 +123,7 @@ Note: The `proxies` table must remain readable by Squid servers for auth verific
 3. On success, calls `GetClientsDetails` to fetch client profile
 4. Creates an iron-session with `whmcs_client_id`, email, and name
 5. Dashboard pages check session; redirect to `/login` if missing
+6. Sessions expire after 24 hours; on expiry, user must re-authenticate against WHMCS
 
 ### Service Data
 
@@ -124,12 +137,13 @@ Note: The `proxies` table must remain readable by Squid servers for auth verific
 3. Hook sends POST to `https://proxiesnow.com/api/webhooks/whmcs/provision`
 4. Payload includes: `client_id`, `service_id`, `product_type`, `quantity`
 5. Next.js API route validates webhook authenticity (shared secret)
-6. Creates proxy entries in PostgreSQL and links them via `user_proxies`
+6. Selects unassigned proxies from the pool matching the product type and assigns them via `user_proxies`
+7. Uses `whmcs_service_id` as an idempotency key — duplicate webhooks for the same service are ignored
 
 ## Brand & Design
 
 - Fresh modern redesign with professional, clean aesthetic
-- Brand colors approximated from current site: dark navy blues, accent greens
+- Brand colors approximated from current site: primary navy `#1a2b4a`, accent green `#2ecc71`, light gray `#f5f7fa`
 - Tailwind CSS for consistent design system
 - Fully responsive / mobile-friendly
 - No emojis; professional tone throughout
@@ -152,9 +166,19 @@ Note: The `proxies` table must remain readable by Squid servers for auth verific
 
 - `proxiesnow.com` pointed to Railway via CNAME or A record
 
+### Usage Tracking
+
+The `usage_logs` table is written to by Squid servers (via external log processing). The Next.js dashboard reads this data for display only — it does not write usage logs.
+
+### Error Handling
+
+- Custom 404 and 500 error pages matching site design
+- WHMCS API failures in the dashboard show user-friendly error messages with retry option
+- Login failures show generic "invalid credentials" (no information leakage)
+
 ## Out of Scope
 
 - WHMCS setup/configuration (assumed pre-existing on Digital Ocean)
 - Squid server configuration (existing, will need DB connection update)
-- Email/notification system
+- Email/notification system (beyond contact form)
 - MySQL-to-PostgreSQL data migration (will need a separate migration plan for existing proxy auth data)
